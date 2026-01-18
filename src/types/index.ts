@@ -3,7 +3,14 @@
  */
 
 // Options and configuration
-export type { PptxRenderOptions, ImageFormat, LogLevel, ResolvedRenderOptions } from './options.js';
+export type {
+  PptxRenderOptions,
+  ImageFormat,
+  LogLevel,
+  ResolvedRenderOptions,
+  PngOptimizationPreset,
+  PngOptimizationOptions,
+} from './options.js';
 export { DEFAULT_RENDER_OPTIONS } from './options.js';
 
 // Results

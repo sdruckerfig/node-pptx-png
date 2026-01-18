@@ -33,7 +33,11 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git remote add:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "WebFetch(domain:skia-canvas.org)",
+      "WebFetch(domain:sharp.pixelplumbing.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(npm show:*)"
     ]
   }
 }

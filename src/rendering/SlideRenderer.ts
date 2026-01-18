@@ -15,6 +15,7 @@ import { ChartParser } from '../parsers/ChartParser.js';
 import { TableRenderer } from './TableRenderer.js';
 import type { ILogger } from '../utils/Logger.js';
 import { createLogger } from '../utils/Logger.js';
+import { PngOptimizer } from '../utils/PngOptimizer.js';
 
 /**
  * Context for rendering a single slide.
@@ -78,6 +79,8 @@ export class SlideRenderer {
   private readonly chartRenderer: ChartRenderer;
   private readonly chartParser: ChartParser;
   private readonly alternateContentRenderer: AlternateContentRenderer;
+  private readonly pngOptimizer: PngOptimizer;
+  private pngOptimizerInitialized = false;
   private tableRenderer: TableRenderer | null = null;
   private shapeRenderer: ShapeRenderer | null = null;
   private groupShapeRenderer: GroupShapeRenderer | null = null;
@@ -102,6 +105,7 @@ export class SlideRenderer {
     this.chartRenderer = new ChartRenderer({ logger: this.logger.child('Chart') });
     this.chartParser = new ChartParser({ theme, logger: this.logger.child('ChartParser') });
     this.alternateContentRenderer = new AlternateContentRenderer({ logger: this.logger.child('AltContent') });
+    this.pngOptimizer = new PngOptimizer(this.logger.child('PngOptimizer'));
   }
 
   /**
@@ -287,7 +291,37 @@ export class SlideRenderer {
       });
     }
 
-    return canvas.toBuffer('png');
+    // Get raw PNG from canvas
+    const pngBuffer = await canvas.toBuffer('png');
+
+    // Apply PNG optimization if configured
+    const optimization = this.options.pngOptimization;
+    if (optimization && optimization !== 'none') {
+      // Initialize optimizer on first use (lazy loading of Sharp)
+      if (!this.pngOptimizerInitialized) {
+        await this.pngOptimizer.initialize();
+        this.pngOptimizerInitialized = true;
+      }
+
+      if (this.pngOptimizer.isAvailable()) {
+        const optimized = await this.pngOptimizer.optimize(pngBuffer, optimization);
+
+        // Log compression stats in debug mode
+        if (this.options.debugMode) {
+          const stats = this.pngOptimizer.getCompressionStats(pngBuffer, optimized);
+          this.logger.debug('PNG optimization', {
+            preset: typeof optimization === 'string' ? optimization : 'custom',
+            originalSize: stats.originalSize,
+            optimizedSize: stats.optimizedSize,
+            reduction: `${stats.reductionPercent}%`,
+          });
+        }
+
+        return optimized;
+      }
+    }
+
+    return pngBuffer;
   }
 
   /**

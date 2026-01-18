@@ -8,3 +8,11 @@ export {
   type DecodedImage,
   type ImageDecoderConfig,
 } from './ImageDecoder.js';
+
+export {
+  PngOptimizer,
+  createPngOptimizer,
+  PNG_PRESETS,
+  type PngOptimizationPreset,
+  type PngOptimizationOptions,
+} from './PngOptimizer.js';
