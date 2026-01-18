@@ -1,37 +1,45 @@
-# pptimg
+# node-pptx-png
 
-High-fidelity PPTX to image converter for Node.js.
+High-fidelity PPTX to PNG converter for Node.js.
 
 ## Overview
 
-`pptimg` is a pure JavaScript/TypeScript library for converting PowerPoint (PPTX) presentations to high-quality images. It uses native canvas rendering (via node-canvas with Cairo) for accurate slide reproduction without relying on LibreOffice, Puppeteer, or other external dependencies.
+`node-pptx-png` is a pure JavaScript/TypeScript library for converting PowerPoint (PPTX) presentations to high-quality PNG images. It uses native canvas rendering (via skia-canvas) for accurate slide reproduction without relying on LibreOffice, Puppeteer, or other external dependencies.
 
 ## Features
 
 - **Pure Node.js** - No external dependencies like LibreOffice or headless browsers
-- **High fidelity** - Cairo-based rendering for accurate slide reproduction
+- **High fidelity** - Skia-based rendering for accurate slide reproduction
 - **TypeScript** - Full type definitions included
 - **Configurable** - Control output size, format, and quality
 - **Theme support** - Proper resolution of PowerPoint theme colors and fonts
+- **Rich content support**:
+  - Shapes with preset geometries (rectangles, chevrons, arrows, etc.)
+  - Text with full styling (fonts, colors, bullets, alignment)
+  - Images (embedded and linked)
+  - Tables with cell formatting
+  - Charts (bar, line, pie)
+  - Backgrounds (solid, gradient, image)
+  - Master/layout inheritance
 
 ## Installation
 
 ```bash
-npm install pptimg
+npm install node-pptx-png
 ```
 
 ### Prerequisites
 
-node-canvas requires some native dependencies. On macOS:
+This library uses `skia-canvas` for rendering. It should work out of the box on most systems, but you may need:
 
+On macOS:
 ```bash
-brew install pkg-config cairo pango libpng jpeg giflib librsvg
+brew install pkg-config
 ```
 
 On Ubuntu/Debian:
-
 ```bash
-sudo apt-get install build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+sudo apt-get install build-essential libfontconfig1-dev
 ```
 
 ## Usage
@@ -39,91 +47,85 @@ sudo apt-get install build-essential libcairo2-dev libpango1.0-dev libjpeg-dev l
 ### Basic Usage
 
 ```typescript
-import { renderPresentation, renderSlide } from 'pptimg';
+import { PptxImageRenderer } from 'node-pptx-png';
+import * as fs from 'fs';
+
+const renderer = new PptxImageRenderer();
 
 // Render all slides
-const result = await renderPresentation('./presentation.pptx');
+const result = await renderer.renderPresentation('./presentation.pptx', {
+  format: 'png',
+  scale: 1.0
+});
 
 for (const slide of result.slides) {
-  if (slide.success) {
-    // slide.imageData is a Buffer containing PNG image data
-    await fs.writeFile(`slide-${slide.slideNumber}.png`, slide.imageData);
+  if (slide.imageData) {
+    fs.writeFileSync(`slide-${slide.slideNumber}.png`, slide.imageData);
   }
 }
-
-// Render a single slide
-const slideResult = await renderSlide('./presentation.pptx', 0); // First slide
 ```
 
 ### With Options
 
 ```typescript
-import { PptxImageRenderer } from 'pptimg';
+import { PptxImageRenderer } from 'node-pptx-png';
 
-const renderer = new PptxImageRenderer({ logLevel: 'debug' });
+const renderer = new PptxImageRenderer({ logLevel: 'info' });
 
 const result = await renderer.renderPresentation('./presentation.pptx', {
-  width: 1920,           // Target width in pixels (default: 1920)
-  format: 'png',         // 'png' or 'jpeg'
-  jpegQuality: 90,       // JPEG quality 1-100 (default: 90)
-  backgroundColor: '#FFFFFF', // Override background color
+  scale: 0.5,              // Scale factor (0.5 = half size)
+  format: 'png',           // Output format
+  slideNumbers: [1, 2, 3], // Optional: render only specific slides
 });
 ```
 
 ### Rendering from Buffer
 
 ```typescript
-import { renderPresentation } from 'pptimg';
-import * as fs from 'fs/promises';
+import { PptxImageRenderer } from 'node-pptx-png';
+import * as fs from 'fs';
 
-const pptxBuffer = await fs.readFile('./presentation.pptx');
-const result = await renderPresentation(pptxBuffer);
-```
-
-### Getting Slide Information
-
-```typescript
-import { PptxImageRenderer } from 'pptimg';
-
+const pptxBuffer = fs.readFileSync('./presentation.pptx');
 const renderer = new PptxImageRenderer();
-
-const slideCount = await renderer.getSlideCount('./presentation.pptx');
-const dimensions = await renderer.getSlideDimensions('./presentation.pptx');
-
-console.log(`Presentation has ${slideCount} slides`);
-console.log(`Slide size: ${dimensions.width} x ${dimensions.height} EMU`);
+const result = await renderer.renderPresentation(pptxBuffer);
 ```
 
 ## API Reference
 
-### `renderPresentation(input, options?)`
+### `PptxImageRenderer`
 
-Renders all slides in a presentation.
+Main class for rendering presentations.
+
+#### Constructor
+
+```typescript
+new PptxImageRenderer(options?: { logLevel?: 'debug' | 'info' | 'warn' | 'error' | 'silent' })
+```
+
+#### Methods
+
+##### `renderPresentation(input, options?)`
+
+Renders all slides (or specified slides) in a presentation.
 
 - `input`: `Buffer | string` - File path or buffer containing PPTX data
-- `options`: `PptxRenderOptions` - Optional rendering options
+- `options`: `RenderOptions` - Optional rendering options
 - Returns: `Promise<PresentationRenderResult>`
 
-### `renderSlide(input, slideIndex, options?)`
+##### `getSlideCount(input)`
 
-Renders a single slide.
+Gets the number of slides in a presentation.
 
 - `input`: `Buffer | string` - File path or buffer containing PPTX data
-- `slideIndex`: `number` - Zero-based slide index
-- `options`: `PptxRenderOptions` - Optional rendering options
-- Returns: `Promise<SlideRenderResult>`
+- Returns: `Promise<number>`
 
-### `PptxRenderOptions`
+### `RenderOptions`
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `width` | `number` | `1920` | Target width in pixels |
-| `height` | `number` | auto | Target height (auto-calculated from aspect ratio) |
-| `format` | `'png' \| 'jpeg'` | `'png'` | Output format |
-| `jpegQuality` | `number` | `90` | JPEG quality (1-100) |
-| `backgroundColor` | `string` | - | Override background color (hex) |
-| `logLevel` | `'debug' \| 'info' \| 'warn' \| 'error' \| 'silent'` | `'warn'` | Logging level |
-| `debugMode` | `boolean` | `false` | Enable debug rendering |
+| `scale` | `number` | `1.0` | Scale factor for output size |
+| `format` | `'png'` | `'png'` | Output format |
+| `slideNumbers` | `number[]` | all | Specific slides to render (1-based) |
 
 ### `SlideRenderResult`
 
@@ -146,39 +148,48 @@ Renders a single slide.
 | `successfulSlides` | `number` | Number of successfully rendered slides |
 | `allSuccessful` | `boolean` | Whether all slides rendered successfully |
 
-## Implementation Status
+## Supported Features
 
-### Phase 1 (Current) - Core Infrastructure
-- [x] Project setup (TypeScript, ESLint, Prettier)
-- [x] Type definitions
-- [x] PPTX parsing (ZIP extraction, XML parsing)
-- [x] Unit conversion (EMU to pixels)
-- [x] Theme resolution (colors, fonts)
-- [x] Background rendering (solid, gradient)
+### Shapes
+- Rectangles, rounded rectangles
+- Chevrons, arrows, pentagons
+- Ellipses, circles
+- Lines and connectors
+- Custom geometries
 
-### Phase 2 - Shape Rendering
-- [ ] Preset geometry calculator (20+ common shapes)
-- [ ] Fill renderer (solid, gradient)
-- [ ] Stroke renderer
-- [ ] Shape renderer integration
+### Text
+- Font families and sizes
+- Bold, italic, underline, strikethrough
+- Text colors (solid and theme colors)
+- Bullet points and numbered lists
+- Paragraph alignment
+- Line spacing
+- Superscript/subscript
 
-### Phase 3 - Text Rendering
-- [ ] Text layout engine
-- [ ] Word wrapping
-- [ ] Font resolution
-- [ ] Text renderer
+### Fills
+- Solid colors
+- Theme/scheme colors (accent1-6, dk1, lt1, etc.)
+- Gradients (linear)
+- Picture fills
 
-### Phase 4 - Images and Media
-- [ ] Relationship parser
-- [ ] Image renderer
-- [ ] Picture fills
+### Tables
+- Cell backgrounds
+- Borders
+- Merged cells
+- Text formatting within cells
 
-### Phase 5 - Advanced Features
-- [ ] All preset geometries (100+)
-- [ ] Custom geometry parser
-- [ ] Group shapes
-- [ ] Placeholder resolution
-- [ ] Charts
+### Charts
+- Bar/column charts
+- Line charts
+- Pie charts
+- Chart titles and legends
+
+### Other
+- Background images
+- Master slide inheritance
+- Layout inheritance
+- Placeholder resolution
+- Shape effects (shadows)
 
 ## Development
 
@@ -195,11 +206,8 @@ npm test
 # Type check
 npx tsc --noEmit
 
-# Lint
-npm run lint
-
-# Format
-npm run format
+# Render a test presentation
+npx ts-node scripts/render-pptx.ts ./test.pptx ./output
 ```
 
 ## License
