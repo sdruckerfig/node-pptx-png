@@ -129,36 +129,10 @@ export class Logger implements ILogger {
 }
 
 /**
- * No-op logger for silent mode.
- */
-export class SilentLogger implements ILogger {
-  debug(_message: string, _data?: Record<string, unknown>): void {
-    // No-op
-  }
-
-  info(_message: string, _data?: Record<string, unknown>): void {
-    // No-op
-  }
-
-  warn(_message: string, _data?: Record<string, unknown>): void {
-    // No-op
-  }
-
-  error(_message: string, _data?: Record<string, unknown>): void {
-    // No-op
-  }
-
-  child(_context: string): ILogger {
-    return this;
-  }
-}
-
-/**
  * Creates a logger instance based on the log level.
+ * Note: 'silent' level uses the standard Logger with priority filtering,
+ * which filters out all log levels (debug, info, warn, error have lower priority than silent).
  */
 export function createLogger(level: LogLevel = 'warn', context?: string): ILogger {
-  if (level === 'silent') {
-    return new SilentLogger();
-  }
   return new Logger(level, context);
 }

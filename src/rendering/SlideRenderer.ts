@@ -68,6 +68,27 @@ export interface SlideRenderOutput {
 }
 
 /**
+ * Internal render state passed through the rendering pipeline.
+ * Eliminates mutable instance state by encapsulating per-render context.
+ */
+interface InternalRenderState {
+  /** PPTX parser instance */
+  parser: PptxParser;
+  /** Path to the slide being rendered */
+  slidePath: string;
+  /** Horizontal scale factor */
+  scaleX: number;
+  /** Vertical scale factor */
+  scaleY: number;
+  /** Shape renderer for this render pass */
+  shapeRenderer: ShapeRenderer;
+  /** Group shape renderer for this render pass */
+  groupShapeRenderer: GroupShapeRenderer;
+  /** Table renderer for this render pass */
+  tableRenderer: TableRenderer;
+}
+
+/**
  * Renders individual slides to images.
  */
 export class SlideRenderer {
@@ -81,13 +102,6 @@ export class SlideRenderer {
   private readonly alternateContentRenderer: AlternateContentRenderer;
   private readonly pngOptimizer: PngOptimizer;
   private pngOptimizerInitialized = false;
-  private tableRenderer: TableRenderer | null = null;
-  private shapeRenderer: ShapeRenderer | null = null;
-  private groupShapeRenderer: GroupShapeRenderer | null = null;
-  private currentParser: PptxParser | null = null;
-  private currentSlidePath: string = '';
-  private currentScaleX: number = 1;
-  private currentScaleY: number = 1;
 
   constructor(
     theme: ResolvedTheme,
@@ -180,43 +194,38 @@ export class SlideRenderer {
         this.options.backgroundColor
       );
 
-      // Store current parser and scale factors for use in rendering methods
-      this.currentParser = parser;
-      this.currentSlidePath = slideData.path;
-      this.currentScaleX = scaleX;
-      this.currentScaleY = scaleY;
-
-      // Initialize shape renderer with current scale factors, parser for image support,
-      // and layout/master nodes for placeholder resolution
-      this.shapeRenderer = new ShapeRenderer({
-        theme: this.theme,
-        scaleX,
-        scaleY,
+      // Create internal render state (encapsulates per-render context)
+      const renderState: InternalRenderState = {
         parser,
-        sourcePath: slideData.path,
-        layoutNode,
-        masterNode,
-        logger: this.logger.child('Shape'),
-      });
-
-      // Initialize group shape renderer
-      this.groupShapeRenderer = new GroupShapeRenderer({
+        slidePath: slideData.path,
         scaleX,
         scaleY,
-        logger: this.logger.child('GroupShape'),
-      });
-
-      // Initialize table renderer
-      this.tableRenderer = new TableRenderer({
-        theme: this.theme,
-        scaleX,
-        scaleY,
-        logger: this.logger.child('Table'),
-      });
+        shapeRenderer: new ShapeRenderer({
+          theme: this.theme,
+          scaleX,
+          scaleY,
+          parser,
+          sourcePath: slideData.path,
+          layoutNode,
+          masterNode,
+          logger: this.logger.child('Shape'),
+        }),
+        groupShapeRenderer: new GroupShapeRenderer({
+          scaleX,
+          scaleY,
+          logger: this.logger.child('GroupShape'),
+        }),
+        tableRenderer: new TableRenderer({
+          theme: this.theme,
+          scaleX,
+          scaleY,
+          logger: this.logger.child('Table'),
+        }),
+      };
 
       // Render shape tree (Phase 2+5)
       // Use ordered parsing to preserve z-order of interleaved elements
-      await this.renderShapeTreeOrdered(ctx, parser, slideData.path);
+      await this.renderShapeTreeOrdered(ctx, renderState);
 
       // Export to image
       const imageData = await this.exportCanvas(canvas);
@@ -375,16 +384,10 @@ export class SlideRenderer {
    */
   private async renderShapeTreeOrdered(
     ctx: CanvasRenderingContext2D,
-    parser: PptxParser,
-    slidePath: string
+    state: InternalRenderState
   ): Promise<void> {
-    if (!this.shapeRenderer) {
-      this.logger.warn('ShapeRenderer not initialized');
-      return;
-    }
-
     // Get the slide XML with preserved element order
-    const orderedSlide = await parser.readXmlOrdered(slidePath);
+    const orderedSlide = await state.parser.readXmlOrdered(state.slidePath);
 
     // Navigate to p:sld > p:cSld > p:spTree in the ordered structure
     const spTreeChildren = this.navigateToSpTree(orderedSlide);
@@ -409,36 +412,36 @@ export class SlideRenderer {
       try {
         switch (tagName) {
           case 'p:sp':
-            await this.shapeRenderer.renderShape(ctx, node);
+            await state.shapeRenderer.renderShape(ctx, node);
             shapeCount++;
             break;
 
           case 'p:cxnSp':
-            this.shapeRenderer.renderConnectionShape(ctx, node);
+            state.shapeRenderer.renderConnectionShape(ctx, node);
             connectionCount++;
             break;
 
           case 'p:pic':
             // Render picture elements (Phase 4)
-            await this.shapeRenderer.renderPicture(ctx, node);
+            await state.shapeRenderer.renderPicture(ctx, node);
             pictureCount++;
             break;
 
           case 'p:grpSp':
             // Render group shapes (Phase 5)
-            await this.renderGroupShape(ctx, node);
+            await this.renderGroupShape(ctx, node, state);
             groupCount++;
             break;
 
           case 'p:graphicFrame':
             // Render graphic frames - charts, tables (Phase 5)
-            await this.renderGraphicFrame(ctx, node);
+            await this.renderGraphicFrame(ctx, node, state);
             graphicFrameCount++;
             break;
 
           case 'mc:AlternateContent':
             // Render alternate content - SmartArt fallbacks (Phase 5)
-            await this.renderAlternateContent(ctx, node);
+            await this.renderAlternateContent(ctx, node, state);
             alternateContentCount++;
             break;
         }
@@ -504,18 +507,15 @@ export class SlideRenderer {
    * Renders a group shape (p:grpSp) element.
    * @param ctx Canvas 2D context
    * @param grpSpNode Group shape XML node
+   * @param state Internal render state
    * @param parentGroupTransform Optional parent group transform for nested groups
    */
   private async renderGroupShape(
     ctx: CanvasRenderingContext2D,
     grpSpNode: PptxXmlNode,
+    state: InternalRenderState,
     parentGroupTransform?: GroupTransform
   ): Promise<void> {
-    if (!this.groupShapeRenderer || !this.shapeRenderer) {
-      this.logger.warn('GroupShapeRenderer or ShapeRenderer not initialized');
-      return;
-    }
-
     // Define the render callback for child elements
     const renderChild = async (
       childCtx: CanvasRenderingContext2D,
@@ -525,28 +525,28 @@ export class SlideRenderer {
     ): Promise<void> => {
       switch (tagName) {
         case 'p:sp':
-          this.renderShapeInGroup(childCtx, node, groupTransform);
+          this.renderShapeInGroup(childCtx, node, state, groupTransform);
           break;
 
         case 'p:cxnSp':
-          this.renderConnectionShapeInGroup(childCtx, node, groupTransform);
+          this.renderConnectionShapeInGroup(childCtx, node, state, groupTransform);
           break;
 
         case 'p:pic':
-          await this.renderPictureInGroup(childCtx, node, groupTransform);
+          await this.renderPictureInGroup(childCtx, node, state, groupTransform);
           break;
 
         case 'p:grpSp':
           // Recursive group rendering
-          await this.renderGroupShape(childCtx, node, groupTransform);
+          await this.renderGroupShape(childCtx, node, state, groupTransform);
           break;
 
         case 'p:graphicFrame':
-          await this.renderGraphicFrame(childCtx, node);
+          await this.renderGraphicFrame(childCtx, node, state);
           break;
 
         case 'mc:AlternateContent':
-          await this.renderAlternateContent(childCtx, node);
+          await this.renderAlternateContent(childCtx, node, state);
           break;
 
         default:
@@ -554,7 +554,7 @@ export class SlideRenderer {
       }
     };
 
-    await this.groupShapeRenderer.renderGroupShape(ctx, grpSpNode, renderChild, parentGroupTransform);
+    await state.groupShapeRenderer.renderGroupShape(ctx, grpSpNode, renderChild, parentGroupTransform);
   }
 
   /**
@@ -563,24 +563,23 @@ export class SlideRenderer {
   private renderShapeInGroup(
     ctx: CanvasRenderingContext2D,
     spNode: PptxXmlNode,
+    state: InternalRenderState,
     groupTransform?: GroupTransform
   ): void {
-    if (!this.shapeRenderer || !this.groupShapeRenderer) return;
-
     // Get shape properties
     const spPr = getXmlChild(spNode, 'p:spPr');
-    const shapeTransform = this.groupShapeRenderer.parseShapeTransform(spPr);
+    const shapeTransform = state.groupShapeRenderer.parseShapeTransform(spPr);
     if (!shapeTransform) {
       this.logger.debug('Shape in group has no transform, skipping');
       return;
     }
 
     // Apply group transform to get final pixel transform
-    const pixelTransform = this.groupShapeRenderer.toPixelTransform(shapeTransform, groupTransform);
+    const pixelTransform = state.groupShapeRenderer.toPixelTransform(shapeTransform, groupTransform);
 
     // Use the ShapeRenderer's existing shape rendering with the modified transform
     // We render the shape by creating a temporary context state
-    this.shapeRenderer.renderShapeWithTransform(ctx, spNode, pixelTransform);
+    state.shapeRenderer.renderShapeWithTransform(ctx, spNode, pixelTransform);
   }
 
   /**
@@ -589,23 +588,22 @@ export class SlideRenderer {
   private renderConnectionShapeInGroup(
     ctx: CanvasRenderingContext2D,
     cxnSpNode: PptxXmlNode,
+    state: InternalRenderState,
     groupTransform?: GroupTransform
   ): void {
-    if (!this.shapeRenderer || !this.groupShapeRenderer) return;
-
     // Get shape properties
     const spPr = getXmlChild(cxnSpNode, 'p:spPr');
-    const shapeTransform = this.groupShapeRenderer.parseShapeTransform(spPr);
+    const shapeTransform = state.groupShapeRenderer.parseShapeTransform(spPr);
     if (!shapeTransform) {
       this.logger.debug('Connection shape in group has no transform, skipping');
       return;
     }
 
     // Apply group transform
-    const pixelTransform = this.groupShapeRenderer.toPixelTransform(shapeTransform, groupTransform);
+    const pixelTransform = state.groupShapeRenderer.toPixelTransform(shapeTransform, groupTransform);
 
     // Render the connection shape with the transformed coordinates
-    this.shapeRenderer.renderConnectionShapeWithTransform(ctx, cxnSpNode, pixelTransform);
+    state.shapeRenderer.renderConnectionShapeWithTransform(ctx, cxnSpNode, pixelTransform);
   }
 
   /**
@@ -614,23 +612,22 @@ export class SlideRenderer {
   private async renderPictureInGroup(
     ctx: CanvasRenderingContext2D,
     picNode: PptxXmlNode,
+    state: InternalRenderState,
     groupTransform?: GroupTransform
   ): Promise<void> {
-    if (!this.shapeRenderer || !this.groupShapeRenderer) return;
-
     // Get shape properties
     const spPr = getXmlChild(picNode, 'p:spPr');
-    const shapeTransform = this.groupShapeRenderer.parseShapeTransform(spPr);
+    const shapeTransform = state.groupShapeRenderer.parseShapeTransform(spPr);
     if (!shapeTransform) {
       this.logger.debug('Picture in group has no transform, skipping');
       return;
     }
 
     // Apply group transform
-    const pixelTransform = this.groupShapeRenderer.toPixelTransform(shapeTransform, groupTransform);
+    const pixelTransform = state.groupShapeRenderer.toPixelTransform(shapeTransform, groupTransform);
 
     // Render the picture with the transformed coordinates
-    await this.shapeRenderer.renderPictureWithTransform(ctx, picNode, pixelTransform);
+    await state.shapeRenderer.renderPictureWithTransform(ctx, picNode, pixelTransform);
   }
 
   /**
@@ -639,13 +636,9 @@ export class SlideRenderer {
    */
   private async renderGraphicFrame(
     ctx: CanvasRenderingContext2D,
-    graphicFrameNode: PptxXmlNode
+    graphicFrameNode: PptxXmlNode,
+    state: InternalRenderState
   ): Promise<void> {
-    if (!this.currentParser) {
-      this.logger.warn('Parser not available for graphic frame rendering');
-      return;
-    }
-
     // Get transform (position and size)
     const xfrm = getXmlChild(graphicFrameNode, 'p:xfrm');
     if (!xfrm) {
@@ -667,10 +660,10 @@ export class SlideRenderer {
 
     // Convert to pixels
     const bounds: Rect = {
-      x: this.unitConverter.emuToPixels(x) * this.currentScaleX,
-      y: this.unitConverter.emuToPixels(y) * this.currentScaleY,
-      width: this.unitConverter.emuToPixels(cx) * this.currentScaleX,
-      height: this.unitConverter.emuToPixels(cy) * this.currentScaleY,
+      x: this.unitConverter.emuToPixels(x) * state.scaleX,
+      y: this.unitConverter.emuToPixels(y) * state.scaleY,
+      width: this.unitConverter.emuToPixels(cx) * state.scaleX,
+      height: this.unitConverter.emuToPixels(cy) * state.scaleY,
     };
 
     if (bounds.width <= 0 || bounds.height <= 0) {
@@ -691,11 +684,11 @@ export class SlideRenderer {
 
     // Check if this is a chart
     if (uri === 'http://schemas.openxmlformats.org/drawingml/2006/chart') {
-      await this.renderChartFrame(ctx, graphicData, bounds);
+      await this.renderChartFrame(ctx, graphicData, bounds, state);
     }
     // Check if this is a table
     else if (uri === 'http://schemas.openxmlformats.org/drawingml/2006/table') {
-      this.renderTableFrame(ctx, graphicData, bounds);
+      this.renderTableFrame(ctx, graphicData, bounds, state);
     }
     // Other types
     else if (uri) {
@@ -709,10 +702,9 @@ export class SlideRenderer {
   private async renderChartFrame(
     ctx: CanvasRenderingContext2D,
     graphicData: PptxXmlNode,
-    bounds: Rect
+    bounds: Rect,
+    state: InternalRenderState
   ): Promise<void> {
-    if (!this.currentParser) return;
-
     // Get the chart reference
     const chartRef = getXmlChild(graphicData, 'c:chart');
     if (!chartRef) {
@@ -728,21 +720,21 @@ export class SlideRenderer {
 
     try {
       // Resolve the chart path from relationships
-      const slideRelsPath = this.currentSlidePath
+      const slideRelsPath = state.slidePath
         .replace('slides/', 'slides/_rels/')
         .replace('.xml', '.xml.rels');
-      const chartTarget = await this.currentParser.getRelationshipTarget(slideRelsPath, chartRelId);
+      const chartTarget = await state.parser.getRelationshipTarget(slideRelsPath, chartRelId);
 
       if (!chartTarget) {
         this.logger.warn('Could not resolve chart relationship', { id: chartRelId });
         return;
       }
 
-      const chartPath = this.currentParser.resolvePath(this.currentSlidePath, chartTarget);
+      const chartPath = state.parser.resolvePath(state.slidePath, chartTarget);
       this.logger.debug('Rendering chart', { path: chartPath });
 
       // Parse and render the chart
-      const chartData = await this.chartParser.parseChart(this.currentParser, chartPath);
+      const chartData = await this.chartParser.parseChart(state.parser, chartPath);
       if (chartData) {
         this.chartRenderer.renderChart(ctx, chartData, bounds);
       }
@@ -759,13 +751,9 @@ export class SlideRenderer {
   private renderTableFrame(
     ctx: CanvasRenderingContext2D,
     graphicData: PptxXmlNode,
-    bounds: Rect
+    bounds: Rect,
+    state: InternalRenderState
   ): void {
-    if (!this.tableRenderer) {
-      this.logger.warn('TableRenderer not initialized');
-      return;
-    }
-
     // Get the table node (a:tbl)
     const tableNode = getXmlChild(graphicData, 'a:tbl');
     if (!tableNode) {
@@ -775,7 +763,7 @@ export class SlideRenderer {
 
     try {
       this.logger.debug('Rendering table', { bounds });
-      this.tableRenderer.renderTable(ctx, tableNode, bounds);
+      state.tableRenderer.renderTable(ctx, tableNode, bounds);
     } catch (error) {
       this.logger.warn('Failed to render table', {
         error: error instanceof Error ? error.message : String(error),
@@ -789,7 +777,8 @@ export class SlideRenderer {
    */
   private async renderAlternateContent(
     ctx: CanvasRenderingContext2D,
-    alternateContentNode: PptxXmlNode
+    alternateContentNode: PptxXmlNode,
+    state: InternalRenderState
   ): Promise<void> {
     // Define the render callback for child elements
     const renderChild = async (
@@ -799,29 +788,23 @@ export class SlideRenderer {
     ): Promise<void> => {
       switch (tagName) {
         case 'p:sp':
-          if (this.shapeRenderer) {
-            await this.shapeRenderer.renderShape(childCtx, node);
-          }
+          await state.shapeRenderer.renderShape(childCtx, node);
           break;
 
         case 'p:cxnSp':
-          if (this.shapeRenderer) {
-            this.shapeRenderer.renderConnectionShape(childCtx, node);
-          }
+          state.shapeRenderer.renderConnectionShape(childCtx, node);
           break;
 
         case 'p:pic':
-          if (this.shapeRenderer) {
-            await this.shapeRenderer.renderPicture(childCtx, node);
-          }
+          await state.shapeRenderer.renderPicture(childCtx, node);
           break;
 
         case 'p:grpSp':
-          await this.renderGroupShape(childCtx, node);
+          await this.renderGroupShape(childCtx, node, state);
           break;
 
         case 'p:graphicFrame':
-          await this.renderGraphicFrame(childCtx, node);
+          await this.renderGraphicFrame(childCtx, node, state);
           break;
 
         default:

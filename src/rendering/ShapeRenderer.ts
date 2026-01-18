@@ -80,10 +80,14 @@ export class ShapeRenderer {
   private readonly masterNode?: PptxXmlNode;
   private readonly transformCalculator: TransformCalculator;
   private readonly geometryCalculator: PresetGeometryCalculator;
-  private readonly fillRenderer: FillRenderer;
-  private readonly strokeRenderer: StrokeRenderer;
-  private readonly textRenderer: TextRenderer;
-  private readonly textParser: TextParser;
+  /** Fill renderer for external use */
+  public readonly fillRenderer: FillRenderer;
+  /** Stroke renderer for external use */
+  public readonly strokeRenderer: StrokeRenderer;
+  /** Text renderer for external use */
+  public readonly textRenderer: TextRenderer;
+  /** Text parser for external use */
+  public readonly textParser: TextParser;
   private imageRenderer: ImageRenderer | null = null;
 
   constructor(config: ShapeRendererConfig) {
@@ -474,35 +478,8 @@ export class ShapeRenderer {
   }
 
   /**
-   * Gets the fill renderer for external use.
-   */
-  getFillRenderer(): FillRenderer {
-    return this.fillRenderer;
-  }
-
-  /**
-   * Gets the stroke renderer for external use.
-   */
-  getStrokeRenderer(): StrokeRenderer {
-    return this.strokeRenderer;
-  }
-
-  /**
-   * Gets the text renderer for external use.
-   */
-  getTextRenderer(): TextRenderer {
-    return this.textRenderer;
-  }
-
-  /**
-   * Gets the text parser for external use.
-   */
-  getTextParser(): TextParser {
-    return this.textParser;
-  }
-
-  /**
    * Gets the image renderer for external use.
+   * Note: This is a getter because imageRenderer can be null and may be recreated.
    */
   getImageRenderer(): ImageRenderer | null {
     return this.imageRenderer;

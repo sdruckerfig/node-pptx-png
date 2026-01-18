@@ -10,11 +10,15 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
 
 /**
  * PNG optimization preset names.
- * - 'none': No optimization (native canvas export)
- * - 'fast': Quick compression (10-20% reduction)
- * - 'balanced': Good balance of speed and size (25-40% reduction)
- * - 'maximum': Best lossless compression (40-55% reduction)
- * - 'web': Palette-based optimization for web (30-70% reduction, may lose quality)
+ *
+ * Note: The native skia-canvas encoder is already efficient (similar to zlib level 6).
+ * Sharp's main value is palette-based quantization for dramatic size reduction.
+ *
+ * - 'none': No optimization (native canvas export, fastest)
+ * - 'fast': Quick lossless recompression (~1-2% smaller)
+ * - 'balanced': Lossless with adaptive filtering (~2-3% smaller)
+ * - 'maximum': Same as balanced (skia-canvas is already efficient for lossless)
+ * - 'web': Palette quantization (60-70% smaller, may lose quality on photos/gradients)
  */
 export type PngOptimizationPreset = 'none' | 'fast' | 'balanced' | 'maximum' | 'web';
 

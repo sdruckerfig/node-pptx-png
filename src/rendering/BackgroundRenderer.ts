@@ -39,11 +39,25 @@ export interface ParsedBackground {
 }
 
 /**
+ * Result of resolving background from inheritance chain.
+ */
+interface ResolvedBackground {
+  background: ParsedBackground | undefined;
+  sourcePath: string;
+}
+
+/**
  * Renders slide backgrounds.
  */
 export class BackgroundRenderer {
   private readonly logger: ILogger;
   private readonly colorResolver: ColorResolver;
+  /** Cached RelationshipParser instance (created lazily) */
+  private relationshipParser: RelationshipParser | null = null;
+  /** Cached ImageDecoder instance (created lazily) */
+  private imageDecoder: ImageDecoder | null = null;
+  /** Cached parser reference for relationship resolution */
+  private cachedParser: PptxParser | null = null;
 
   constructor(theme: ResolvedTheme, logger?: ILogger) {
     this.logger = logger ?? createLogger('warn', 'BackgroundRenderer');
@@ -72,65 +86,11 @@ export class BackgroundRenderer {
       return;
     }
 
-    // Try to get background from slide first
-    let background = this.parseBackground(slideNode);
+    // Resolve background from inheritance chain (without path tracking for sync method)
+    const background = this.resolveBackgroundFromChain(slideNode, layoutNode, masterNode);
 
-    // If no slide background, try layout
-    if (!background && layoutNode) {
-      background = this.parseBackground(layoutNode);
-    }
-
-    // If no layout background, try master
-    if (!background && masterNode) {
-      background = this.parseBackground(masterNode);
-    }
-
-    // If still no background, use white as default
-    if (!background) {
-      this.logger.debug('No background found, using white default');
-      this.fillSolid(ctx, width, height, Colors.white);
-      return;
-    }
-
-    // Render based on background type
-    switch (background.type) {
-      case 'solid':
-        this.fillSolid(ctx, width, height, background.color ?? Colors.white);
-        break;
-
-      case 'gradient':
-        if (background.gradientStops && background.gradientStops.length >= 2) {
-          if (background.isRadial) {
-            this.fillRadialGradient(ctx, width, height, background.gradientStops);
-          } else {
-            this.fillLinearGradient(
-              ctx,
-              width,
-              height,
-              background.gradientStops,
-              background.gradientAngle ?? 0
-            );
-          }
-        } else {
-          this.fillSolid(ctx, width, height, Colors.white);
-        }
-        break;
-
-      case 'pattern':
-        // Pattern fills are complex - fallback to solid for Phase 1
-        this.logger.debug('Pattern background not yet supported, using solid');
-        this.fillSolid(ctx, width, height, background.color ?? Colors.white);
-        break;
-
-      case 'picture':
-        // Picture backgrounds require async rendering - this sync method falls back to white
-        this.logger.debug('Picture background detected, use renderBackgroundAsync for image support');
-        this.fillSolid(ctx, width, height, Colors.white);
-        break;
-
-      default:
-        this.fillSolid(ctx, width, height, Colors.white);
-    }
+    // Render the background (sync version - no picture support)
+    this.renderBackgroundFill(ctx, width, height, background, false);
   }
 
   /**
@@ -170,63 +130,159 @@ export class BackgroundRenderer {
       return;
     }
 
-    // Try to get background from slide first
-    let background = this.parseBackground(slideNode);
-    let sourcePath = slidePath;
+    // Resolve background from inheritance chain with path tracking
+    const { background, sourcePath } = this.resolveBackgroundFromChainWithPath(
+      slideNode,
+      slidePath,
+      layoutNode,
+      layoutPath,
+      masterNode,
+      masterPath
+    );
 
+    // Render the background (async version - with picture support)
+    await this.renderBackgroundFillAsync(ctx, width, height, background, parser, sourcePath);
+  }
+
+  /**
+   * Resolves background from the inheritance chain (slide -> layout -> master).
+   * Simple version without path tracking for sync rendering.
+   */
+  private resolveBackgroundFromChain(
+    slideNode: PptxXmlNode,
+    layoutNode?: PptxXmlNode,
+    masterNode?: PptxXmlNode
+  ): ParsedBackground | undefined {
+    // Try slide first
+    let background = this.parseBackground(slideNode);
+    if (background) return background;
+
+    // Try layout
+    if (layoutNode) {
+      background = this.parseBackground(layoutNode);
+      if (background) return background;
+    }
+
+    // Try master
+    if (masterNode) {
+      background = this.parseBackground(masterNode);
+      if (background) return background;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Resolves background from the inheritance chain with path tracking.
+   * Required for async rendering to resolve picture relationships from the correct source.
+   */
+  private resolveBackgroundFromChainWithPath(
+    slideNode: PptxXmlNode,
+    slidePath: string,
+    layoutNode?: PptxXmlNode,
+    layoutPath?: string,
+    masterNode?: PptxXmlNode,
+    masterPath?: string
+  ): ResolvedBackground {
+    // Try slide first
+    let background = this.parseBackground(slideNode);
     if (background) {
       if (background.pictureFill) {
         background.pictureFill.source = 'slide';
       }
+      return { background, sourcePath: slidePath };
     }
 
-    // If no slide background, try layout
-    if (!background && layoutNode) {
+    // Try layout
+    if (layoutNode) {
       background = this.parseBackground(layoutNode);
-      if (background?.pictureFill) {
-        background.pictureFill.source = 'layout';
-        sourcePath = layoutPath ?? slidePath;
+      if (background) {
+        if (background.pictureFill) {
+          background.pictureFill.source = 'layout';
+        }
+        return { background, sourcePath: layoutPath ?? slidePath };
       }
     }
 
-    // If no layout background, try master
-    if (!background && masterNode) {
+    // Try master
+    if (masterNode) {
       background = this.parseBackground(masterNode);
-      if (background?.pictureFill) {
-        background.pictureFill.source = 'master';
-        sourcePath = masterPath ?? slidePath;
+      if (background) {
+        if (background.pictureFill) {
+          background.pictureFill.source = 'master';
+        }
+        return { background, sourcePath: masterPath ?? slidePath };
       }
     }
 
-    // If still no background, use white as default
+    return { background: undefined, sourcePath: slidePath };
+  }
+
+  /**
+   * Renders background fill (sync version - no picture support).
+   */
+  private renderBackgroundFill(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    background: ParsedBackground | undefined,
+    _supportPicture: false
+  ): void {
     if (!background) {
       this.logger.debug('No background found, using white default');
       this.fillSolid(ctx, width, height, Colors.white);
       return;
     }
 
-    // Render based on background type
     switch (background.type) {
       case 'solid':
         this.fillSolid(ctx, width, height, background.color ?? Colors.white);
         break;
 
       case 'gradient':
-        if (background.gradientStops && background.gradientStops.length >= 2) {
-          if (background.isRadial) {
-            this.fillRadialGradient(ctx, width, height, background.gradientStops);
-          } else {
-            this.fillLinearGradient(
-              ctx,
-              width,
-              height,
-              background.gradientStops,
-              background.gradientAngle ?? 0
-            );
-          }
-        } else {
-          this.fillSolid(ctx, width, height, Colors.white);
-        }
+        this.renderGradient(ctx, width, height, background);
+        break;
+
+      case 'pattern':
+        this.logger.debug('Pattern background not yet supported, using solid');
+        this.fillSolid(ctx, width, height, background.color ?? Colors.white);
+        break;
+
+      case 'picture':
+        // Picture backgrounds require async rendering - this sync method falls back to white
+        this.logger.debug('Picture background detected, use renderBackgroundAsync for image support');
+        this.fillSolid(ctx, width, height, Colors.white);
+        break;
+
+      default:
+        this.fillSolid(ctx, width, height, Colors.white);
+    }
+  }
+
+  /**
+   * Renders background fill (async version - with picture support).
+   */
+  private async renderBackgroundFillAsync(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    background: ParsedBackground | undefined,
+    parser: PptxParser,
+    sourcePath: string
+  ): Promise<void> {
+    if (!background) {
+      this.logger.debug('No background found, using white default');
+      this.fillSolid(ctx, width, height, Colors.white);
+      return;
+    }
+
+    switch (background.type) {
+      case 'solid':
+        this.fillSolid(ctx, width, height, background.color ?? Colors.white);
+        break;
+
+      case 'gradient':
+        this.renderGradient(ctx, width, height, background);
         break;
 
       case 'pattern':
@@ -236,14 +292,7 @@ export class BackgroundRenderer {
 
       case 'picture':
         if (background.pictureFill) {
-          await this.fillPicture(
-            ctx,
-            width,
-            height,
-            background.pictureFill,
-            parser,
-            sourcePath
-          );
+          await this.fillPicture(ctx, width, height, background.pictureFill, parser, sourcePath);
         } else {
           this.fillSolid(ctx, width, height, Colors.white);
         }
@@ -252,6 +301,63 @@ export class BackgroundRenderer {
       default:
         this.fillSolid(ctx, width, height, Colors.white);
     }
+  }
+
+  /**
+   * Renders gradient background (shared between sync and async).
+   */
+  private renderGradient(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    background: ParsedBackground
+  ): void {
+    if (background.gradientStops && background.gradientStops.length >= 2) {
+      if (background.isRadial) {
+        this.fillRadialGradient(ctx, width, height, background.gradientStops);
+      } else {
+        this.fillLinearGradient(
+          ctx,
+          width,
+          height,
+          background.gradientStops,
+          background.gradientAngle ?? 0
+        );
+      }
+    } else {
+      this.fillSolid(ctx, width, height, Colors.white);
+    }
+  }
+
+  /**
+   * Gets or creates the cached RelationshipParser instance.
+   */
+  private getRelationshipParser(parser: PptxParser): RelationshipParser {
+    // Invalidate cache if parser changed
+    if (this.cachedParser !== parser) {
+      this.cachedParser = parser;
+      this.relationshipParser = null;
+    }
+
+    if (!this.relationshipParser) {
+      this.relationshipParser = new RelationshipParser({
+        parser,
+        logger: this.logger.child?.('RelParser'),
+      });
+    }
+    return this.relationshipParser;
+  }
+
+  /**
+   * Gets or creates the cached ImageDecoder instance.
+   */
+  private getImageDecoder(): ImageDecoder {
+    if (!this.imageDecoder) {
+      this.imageDecoder = new ImageDecoder({
+        logger: this.logger.child?.('Decoder'),
+      });
+    }
+    return this.imageDecoder;
   }
 
   /**
@@ -273,11 +379,8 @@ export class BackgroundRenderer {
     sourcePath: string
   ): Promise<void> {
     try {
-      // Resolve the image relationship
-      const relationshipParser = new RelationshipParser({
-        parser,
-        logger: this.logger.child?.('RelParser'),
-      });
+      // Use cached RelationshipParser
+      const relationshipParser = this.getRelationshipParser(parser);
 
       const mediaPath = await relationshipParser.resolveImageRelationship(
         sourcePath,
@@ -296,10 +399,8 @@ export class BackgroundRenderer {
       // Load the image data from the PPTX
       const buffer = await parser.readBinary(mediaPath);
 
-      // Decode the image
-      const imageDecoder = new ImageDecoder({
-        logger: this.logger.child?.('Decoder'),
-      });
+      // Use cached ImageDecoder
+      const imageDecoder = this.getImageDecoder();
       const decoded = await imageDecoder.decode(buffer);
 
       // Draw the image stretched to fill the entire canvas
@@ -389,7 +490,7 @@ export class BackgroundRenderer {
           type: 'picture',
           pictureFill: {
             blipRelId,
-            source: 'slide', // Will be updated by parseBackgroundWithSource
+            source: 'slide', // Will be updated by resolveBackgroundFromChainWithPath
           },
         };
       }
@@ -578,16 +679,7 @@ export class BackgroundRenderer {
     layoutNode?: PptxXmlNode,
     masterNode?: PptxXmlNode
   ): Rgba | undefined {
-    // Try to get background from slide first
-    let background = this.parseBackground(slideNode);
-
-    if (!background && layoutNode) {
-      background = this.parseBackground(layoutNode);
-    }
-
-    if (!background && masterNode) {
-      background = this.parseBackground(masterNode);
-    }
+    const background = this.resolveBackgroundFromChain(slideNode, layoutNode, masterNode);
 
     if (background?.type === 'solid' && background.color) {
       return background.color;

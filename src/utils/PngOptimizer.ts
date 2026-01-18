@@ -4,63 +4,9 @@
  */
 
 import type { Canvas } from 'skia-canvas';
+import type { PngOptimizationPreset, PngOptimizationOptions } from '../types/options.js';
 import type { ILogger } from './Logger.js';
 import { createLogger } from './Logger.js';
-
-/**
- * PNG optimization preset names.
- */
-export type PngOptimizationPreset = 'none' | 'fast' | 'balanced' | 'maximum' | 'web';
-
-/**
- * PNG optimization options.
- */
-export interface PngOptimizationOptions {
-  /**
-   * PNG compression level (0-9).
-   * 0 = fastest/largest, 9 = slowest/smallest.
-   * @default 6
-   */
-  compressionLevel?: number;
-
-  /**
-   * Use adaptive row filtering for better compression.
-   * Slightly slower but can improve compression ratio.
-   * @default true
-   */
-  adaptiveFiltering?: boolean;
-
-  /**
-   * Convert to indexed/palette PNG.
-   * Significant size reduction for images with limited colors.
-   * May cause quality loss for complex images.
-   * @default false
-   */
-  palette?: boolean;
-
-  /**
-   * Maximum colors for palette mode (2-256).
-   * Only used when palette is true.
-   * @default 256
-   */
-  colors?: number;
-
-  /**
-   * Quality threshold for palette quantization (1-100).
-   * Lower values = more aggressive compression.
-   * Only used when palette is true.
-   * @default 90
-   */
-  quality?: number;
-
-  /**
-   * Floyd-Steinberg dithering strength (0.0-1.0).
-   * Higher values reduce banding in palette mode.
-   * Only used when palette is true.
-   * @default 1.0
-   */
-  dither?: number;
-}
 
 /**
  * Preset configurations for PNG optimization.
@@ -93,7 +39,12 @@ export const PNG_PRESETS: Record<PngOptimizationPreset, PngOptimizationOptions> 
     adaptiveFiltering: true,
   },
 
-  /** Maximum lossless compression - same as balanced */
+  /**
+   * Maximum lossless compression.
+   * Note: Identical to 'balanced' because skia-canvas already uses efficient
+   * compression. This preset exists for API completeness - users expect a
+   * "maximum" option. For significantly smaller files, use 'web' preset instead.
+   */
   maximum: {
     compressionLevel: 9,
     adaptiveFiltering: true,

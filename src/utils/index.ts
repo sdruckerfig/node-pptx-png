@@ -1,4 +1,4 @@
-export { Logger, SilentLogger, createLogger } from './Logger.js';
+export { Logger, createLogger } from './Logger.js';
 export type { ILogger, LogEntry } from './Logger.js';
 
 export {
@@ -13,6 +13,7 @@ export {
   PngOptimizer,
   createPngOptimizer,
   PNG_PRESETS,
-  type PngOptimizationPreset,
-  type PngOptimizationOptions,
 } from './PngOptimizer.js';
+
+// Re-export PNG types from options (canonical source)
+export type { PngOptimizationPreset, PngOptimizationOptions } from '../types/options.js';
