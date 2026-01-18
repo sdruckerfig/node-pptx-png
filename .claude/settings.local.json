@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm test:*)",
+      "Bash(npx eslint:*)",
+      "Bash(git checkout:*)",
+      "Bash(npm run test:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(node --experimental-vm-modules:*)",
+      "Bash(node scripts/render-pptx.ts:*)",
+      "Bash(unzip:*)",
+      "Bash(identify:*)",
+      "Bash(npx tsx:*)",
+      "Bash(LOG_LEVEL=debug node dist/cli/index.js:*)",
+      "Bash(xmllint:*)",
+      "Bash(open:*)",
+      "Bash(node:*)",
+      "Bash(LOG_LEVEL=info npx ts-node:*)",
+      "Bash(LOG_LEVEL=info node:*)",
+      "Bash(LOG_LEVEL=debug node:*)",
+      "Bash(LOG_LEVEL=warn node:*)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:c-rex.net)",
+      "Bash(git init:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
