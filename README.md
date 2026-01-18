@@ -12,6 +12,7 @@ High-fidelity PPTX to PNG converter for Node.js.
 - **High fidelity** - Skia-based rendering for accurate slide reproduction
 - **TypeScript** - Full type definitions included
 - **Configurable** - Control output size, format, and quality
+- **PNG optimization** - Optional Sharp integration for 60-70% smaller files
 - **Theme support** - Proper resolution of PowerPoint theme colors and fonts
 - **Rich content support**:
   - Shapes with preset geometries (rectangles, chevrons, arrows, etc.)
@@ -79,6 +80,41 @@ const result = await renderer.renderPresentation('./presentation.pptx', {
 });
 ```
 
+### With PNG Optimization
+
+For smaller file sizes, enable PNG optimization (requires `sharp` to be installed):
+
+```bash
+npm install sharp
+```
+
+```typescript
+import { PptxImageRenderer } from 'node-pptx-png';
+
+const renderer = new PptxImageRenderer();
+
+// Use the 'web' preset for maximum compression (60-70% smaller)
+const result = await renderer.renderPresentation('./presentation.pptx', {
+  pngOptimization: 'web'
+});
+
+// Or use other presets
+const result2 = await renderer.renderPresentation('./presentation.pptx', {
+  pngOptimization: 'balanced'  // ~2-3% smaller, lossless
+});
+
+// Or use custom options
+const result3 = await renderer.renderPresentation('./presentation.pptx', {
+  pngOptimization: {
+    compressionLevel: 9,
+    adaptiveFiltering: true,
+    palette: true,
+    colors: 128,
+    quality: 80
+  }
+});
+```
+
 ### Rendering from Buffer
 
 ```typescript
@@ -126,6 +162,30 @@ Gets the number of slides in a presentation.
 | `scale` | `number` | `1.0` | Scale factor for output size |
 | `format` | `'png'` | `'png'` | Output format |
 | `slideNumbers` | `number[]` | all | Specific slides to render (1-based) |
+| `pngOptimization` | `string \| object` | `'none'` | PNG optimization preset or custom options |
+
+### PNG Optimization Presets
+
+| Preset | Size Reduction | Description |
+|--------|----------------|-------------|
+| `'none'` | 0% | No optimization (fastest) |
+| `'fast'` | ~1-2% | Quick lossless compression |
+| `'balanced'` | ~2-3% | Lossless with adaptive filtering |
+| `'maximum'` | ~2-3% | Best lossless compression |
+| `'web'` | **60-70%** | Palette quantization (may affect photo quality) |
+
+### `PngOptimizationOptions`
+
+For custom PNG optimization:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `compressionLevel` | `number` | `6` | Compression level (0-9, higher = smaller) |
+| `adaptiveFiltering` | `boolean` | `true` | Use adaptive row filtering |
+| `palette` | `boolean` | `false` | Convert to indexed PNG (max 256 colors) |
+| `colors` | `number` | `256` | Max colors for palette mode (2-256) |
+| `quality` | `number` | `90` | Palette quantization quality (1-100) |
+| `dither` | `number` | `1.0` | Dithering strength for palette mode (0-1) |
 
 ### `SlideRenderResult`
 
